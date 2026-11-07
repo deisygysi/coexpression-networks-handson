@@ -1,0 +1,83 @@
+@import url("https://fonts.googleapis.com/css2?family=Fraunces:wght@600;700&family=Catamaran:wght@400;600;700&display=swap");
+
+:root {
+  --charcoal: #1a1618;
+  --raised: #242024;
+  --plum: #6b515d;
+  --rose: #eeb4c8;
+  --teal: #64d2d2;
+  --gold: #f2c66d;
+  --paper: #e5dada;
+  --muted: #c0b4b8;
+  --line: #4a303a;
+}
+
+body {
+  background: var(--charcoal);
+  color: var(--paper);
+  font-family: "Catamaran", sans-serif;
+  font-size: 1.06rem;
+  line-height: 1.55;
+}
+
+h1, h2, h3, .title {
+  color: var(--rose);
+  font-family: "Fraunces", Georgia, serif;
+  font-weight: 700;
+}
+
+h1.title { font-size: 2.3rem; }
+.subtitle { color: var(--paper); font-family: "Fraunces", Georgia, serif; }
+
+h1:not(.title) {
+  border-bottom: 1px solid var(--line);
+  margin-top: 2.4rem;
+  padding-bottom: 0.3rem;
+}
+
+a { color: var(--teal); }
+strong { color: #fff3f6; }
+
+.lead {
+  border-left: 4px solid var(--teal);
+  background: rgba(100, 210, 210, 0.08);
+  padding: 0.6rem 0.9rem;
+  font-size: 1.12rem;
+}
+
+pre, div.sourceCode {
+  background: var(--raised) !important;
+  border: 1px solid rgba(100, 210, 210, 0.35);
+  border-radius: 4px;
+}
+
+code { color: var(--teal); }
+pre code { color: var(--paper); }
+
+.cell-output pre {
+  background: #141113 !important;
+  border-color: rgba(238, 180, 200, 0.2);
+}
+
+.callout {
+  background: #211d20 !important;
+  border-radius: 4px;
+}
+
+.callout.callout-style-default .callout-header { background: transparent !important; }
+
+.callout-tip { border-left-color: var(--gold) !important; }
+.callout-tip .callout-title-container { color: var(--gold); font-weight: 700; }
+.callout-note { border-left-color: var(--teal) !important; }
+.callout-note .callout-title-container { color: var(--teal); font-weight: 700; }
+.callout-important { border-left-color: var(--rose) !important; }
+.callout-important .callout-title-container { color: var(--rose); font-weight: 700; }
+
+#TOC a, .sidebar nav a { color: var(--muted); }
+#TOC a.active, .sidebar nav a.active { color: var(--teal); border-left-color: var(--teal); }
+
+table { color: var(--paper); }
+table th { color: var(--rose); }
+
+/* wrap long code lines instead of horizontal scrolling */
+div.sourceCode pre, div.sourceCode pre code, .cell-output pre { white-space: pre-wrap !important; overflow-wrap: anywhere; }

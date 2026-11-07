@@ -1,0 +1,20 @@
+# R and RStudio
+.Rhistory
+.RData
+.Rproj.user/
+*.Rproj
+
+# renv: keep the lockfile and activate script, not the installed library
+renv/library/
+renv/staging/
+renv/local/
+
+# raw GEO downloads (rebuilt by R/prepare_gse124326.R)
+data/raw/
+
+# Quarto build artifacts
+.quarto/
+*_files/
+
+# OS
+.DS_Store

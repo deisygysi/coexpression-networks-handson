@@ -1,0 +1,821 @@
+---
+title: "Co-expression Networks · Hands-on"
+subtitle: "Tutorial VT1 | ISCB-Latin America SoIBio SPBBC Conference on Bioinformatics 2026"
+author: "Dr. Deisy Morselli Gysi | Federal University of Paraná (UFPR), Brazil"
+date: "November 9, 2026"
+format:
+  html:
+    theme: darkly
+    css: handson.css
+    toc: true
+    toc-depth: 2
+    toc-location: left
+    number-sections: true
+    code-copy: true
+    code-tools: false
+    embed-resources: true
+    fig-align: center
+knitr:
+  opts_chunk:
+    dev: ragg_png
+    dev.args:
+      bg: "#1A1618"
+execute:
+  echo: true
+  warning: false
+  message: false
+editor:
+  markdown:
+    wrap: 80
+---
+
+```{r}
+#| label: utf8-locale
+#| include: false
+if (!isTRUE(l10n_info()$`UTF-8`)) invisible(Sys.setlocale("LC_CTYPE", "en_US.UTF-8"))
+```
+
+::: {.lead}
+This notebook follows the lecture step by step. Run each chunk in order in
+RStudio (or Positron). Each **Exercise** box asks you to change one thing and
+interpret the result; fill the `___` blanks in the exercise chunk, run it, and
+only then open **Show solution**.
+:::
+
+::: {.callout-important title="Before you start · run it again"}
+1. Open the workshop folder as the working directory (it contains `data/`,
+   `R/`, and `results/`).
+2. Restore the pinned package environment **once**:
+
+   ```r
+   install.packages("renv")
+   renv::restore()
+   ```
+
+3. The input `data/gse124326_bd_lithium.rds` ships with the workshop. If it is
+   missing, rebuild it from GEO with `source("R/prepare_gse124326.R")`.
+4. The wTO networks for 2,000 genes are **cached** in `results/wto_cache_2k.rds`
+   and load in seconds. If the file is missing, rebuild it once (~15 min) with
+   `source("R/build_wto_cache.R")`.
+5. To render the whole notebook in one go, from a terminal in this folder:
+
+   ```sh
+   quarto render coexpression_handson_iscb_la_2026.qmd
+   ```
+
+Do not install or update packages during the workshop: update deliberately,
+review the results, then regenerate `renv.lock`.
+:::
+
+# Setup
+
+```{r}
+#| label: setup
+suppressPackageStartupMessages({
+  library(dplyr)
+  library(tidyr)
+  library(tibble)
+  library(ggplot2)
+  library(WGCNA)
+})
+options(stringsAsFactors = FALSE)
+source("R/wto_fast.R")   # vectorised wTO, identical output to wTO::wTO.fast()
+
+pal <- list(bg = "#1A1618", rose = "#EEB4C8", teal = "#64D2D2", gold = "#F2C66D",
+            muted = "#8B7780", text = "#D7CBD0", paper = "#F3E9ED",
+            plum = "#A35876", dteal = "#318080", line = "#4A303A", soft = "#C0B4B8")
+
+theme_set(theme_minimal(base_size = 13) + theme(
+  text = element_text(color = "#E5DADA"),
+  plot.title = element_text(face = "bold", color = pal$rose),
+  plot.subtitle = element_text(color = pal$soft),
+  plot.background = element_rect(fill = pal$bg, color = NA),
+  panel.background = element_rect(fill = pal$bg, color = NA),
+  panel.grid.minor = element_blank(),
+  panel.grid.major = element_line(color = pal$line, linewidth = 0.35),
+  axis.text = element_text(color = "#E5DADA"),
+  axis.title = element_text(color = pal$soft),
+  legend.position = "bottom",
+  legend.background = element_rect(fill = pal$bg, color = NA),
+  legend.key = element_rect(fill = pal$bg, color = NA)
+))
+grp_levels <- c("Control", "no Lithium", "Lithium")
+cond_cols <- c(Control = pal$gold, `no Lithium` = pal$teal, Lithium = pal$rose)
+```
+
+# Data and quality control
+
+The data are whole-blood RNA-seq from **GSE124326** (Krebs *et al.*, 2020):
+112 **controls** and 226 patients with bipolar I disorder, 152 taking
+**lithium** and 74 not taking it. Three groups give three networks.
+The prepared file holds log2-CPM values (genes x samples) and one row of
+metadata per sample, including sex, sequencing plate, and estimated blood-cell
+fractions.
+
+```{r}
+#| label: load
+course_data <- readRDS("data/gse124326_bd_lithium.rds")
+expression_matrix <- course_data$expression   # genes x samples, log2-CPM
+sample_info <- course_data$sample_info
+stopifnot(identical(sample_info$sample, colnames(expression_matrix)))
+dim(expression_matrix)
+head(sample_info[, c("sample", "treatment", "sex", "plate", "neutrophils")])
+```
+
+::: {.callout-tip title="Exercise 1 · What drives the main axes of variation?"}
+Count the samples per condition and per sex. Run a PCA on the 500 most variable
+genes and colour it by **treatment**, **sex**, and **plate** in turn. Which
+variable lines up with PC1 or PC2?
+:::
+
+```{r}
+#| label: ex1-task
+#| eval: false
+table(sample_info$treatment, sample_info$___)
+
+raw_variance <- apply(expression_matrix, 1, var)
+top500 <- names(sort(raw_variance, decreasing = TRUE))[1:___]
+pca <- prcomp(t(expression_matrix[top500, ]), scale. = TRUE)
+pca_data <- cbind(sample_info, PC1 = pca$x[, 1], PC2 = pca$x[, 2])
+ggplot(pca_data, aes(PC1, PC2, color = ___)) + geom_point()
+```
+
+::: {.callout-note collapse="true" title="Show solution"}
+```{r}
+#| label: ex1-solution
+table(sample_info$treatment, sample_info$sex)
+
+raw_variance <- apply(expression_matrix, 1, var)
+top500 <- names(sort(raw_variance, decreasing = TRUE))[1:500]
+pca <- prcomp(t(expression_matrix[top500, ]), scale. = TRUE)
+pca_data <- cbind(sample_info, PC1 = pca$x[, 1], PC2 = pca$x[, 2])
+pca_long <- pca_data |>
+  select(PC1, PC2, treatment, sex, plate) |>
+  pivot_longer(c(treatment, sex, plate), names_to = "variable", values_to = "level")
+ggplot(pca_long, aes(PC1, PC2, color = level)) +
+  geom_point(size = 1.6, alpha = 0.8) +
+  facet_wrap(~ variable) +
+  labs(title = "PCA of the 500 most variable genes", color = NULL)
+```
+
+**Sequencing plate** drives PC1, the largest axis of variation. Sex barely
+shows on the first two PCs, even though `XIST` is the single most variable gene:
+one gene does not make a principal component. Lithium does **not** dominate the
+main axes either; its effect is real but small per gene. Plate and sex go into
+the limma model and are removed before building networks.
+:::
+
+# Gene selection
+
+Network methods scale with the square of the number of genes, and genes that
+barely vary contribute mostly noise correlations. We first remove the plate
+and sex effects (keeping the group effects), keep **expressed** genes (mean
+log-CPM ≥ 2; at low counts, log values vary mostly by sampling noise), and then
+keep the **2,000 most variable** of them. This filter ignores the condition labels, so later
+module–trait associations are not built in by the selection.
+
+```{r}
+#| label: select-genes
+treatment_design <- model.matrix(~ factor(treatment, levels = grp_levels), data = sample_info)
+adjusted_matrix <- limma::removeBatchEffect(
+  expression_matrix, batch = sample_info$plate,
+  covariates = model.matrix(~ sex, data = sample_info)[, -1, drop = FALSE],
+  design = treatment_design)
+expressed <- rowMeans(expression_matrix) >= 2   # drop low, noisy genes first
+gene_variance <- apply(adjusted_matrix[expressed, ], 1, var)
+selected_genes <- names(sort(gene_variance, decreasing = TRUE))[1:2000]
+network_matrix <- adjusted_matrix[selected_genes, ]
+dat_expr <- t(network_matrix)   # samples x genes for WGCNA and ARACNE
+dim(dat_expr)
+```
+
+::: {.callout-tip title="Exercise 2 · Why adjust, and why filter by variance?"}
+(a) What are the variance and the variance rank of `XIST` before and after
+adjustment?
+(b) Compare absolute gene–gene correlations for the 2,000 selected genes and
+2,000 random genes. Which set correlates more strongly? Correlate the first
+principal component of each set with the estimated neutrophil fraction: what
+drives the correlation?
+:::
+
+```{r}
+#| label: ex2-task
+#| eval: false
+rank_of <- function(v, g) match(g, names(sort(v, decreasing = TRUE)))
+c(before = rank_of(raw_variance, "XIST"), after = rank_of(___, "XIST"))
+
+set.seed(1)
+random_genes <- sample(rownames(adjusted_matrix), ___)
+abs_cor <- function(genes) {
+  C <- cor(t(adjusted_matrix[genes, ]))
+  abs(C[upper.tri(C)])
+}
+summary(abs_cor(selected_genes))
+summary(abs_cor(___))
+pc1 <- function(genes) prcomp(t(adjusted_matrix[genes, ]), scale. = TRUE)$x[, 1]
+cor(pc1(random_genes), sample_info$___)
+```
+
+::: {.callout-note collapse="true" title="Show solution"}
+```{r}
+#| label: ex2-solution
+rank_of <- function(v, g) match(g, names(sort(v, decreasing = TRUE)))
+tibble(when = c("before", "after"),
+       variance = round(c(raw_variance["XIST"], gene_variance["XIST"]), 2),
+       rank = c(rank_of(raw_variance, "XIST"), rank_of(gene_variance, "XIST")))
+
+set.seed(1)
+random_genes <- sample(rownames(adjusted_matrix), 2000)
+abs_cor <- function(genes) {
+  C <- cor(t(adjusted_matrix[genes, ]))
+  abs(C[upper.tri(C)])
+}
+cor_cmp <- bind_rows(
+  tibble(set = "Top 2,000 by variance", r = abs_cor(selected_genes)),
+  tibble(set = "Random 2,000", r = abs_cor(random_genes))
+)
+cor_cmp |> group_by(set) |> summarise(median = median(r), q90 = quantile(r, 0.9))
+
+ggplot(cor_cmp, aes(r, fill = set)) +
+  geom_density(alpha = 0.6, color = NA) +
+  scale_fill_manual(values = c(pal$muted, pal$gold)) +
+  labs(title = "Absolute gene–gene correlation", x = "|r|", y = "Density", fill = NULL)
+
+pc1 <- function(genes) prcomp(t(adjusted_matrix[genes, ]), scale. = TRUE)$x[, 1]
+c(random_pc1_vs_neutrophils   = cor(pc1(random_genes), sample_info$neutrophils),
+  selected_pc1_vs_neutrophils = cor(pc1(selected_genes), sample_info$neutrophils))
+```
+
+(a) Adjustment removes the female–male difference, so `XIST` loses most of its
+variance; it still varies between women and may stay in the top 2,000.
+(b) The random genes correlate **more**, and the first PC of **both** sets
+follows the neutrophil fraction (a PC's sign is arbitrary, so read |r|). In whole blood, the mix of cell types moves thousands of
+genes up and down together. Strong correlation is not automatically interesting
+structure: ask what drives it. That cell-mix axis is also why the lithium
+contrast, which raises neutrophils, needs care.
+:::
+
+# Differential expression with limma
+
+limma tests **all** expressed genes, with sex and plate as covariates. One model
+answers two questions: **lithium** (on vs off lithium, within bipolar disorder)
+and **diagnosis** (patients off lithium vs controls, so the drug does not leak
+into the disease contrast). `trend = TRUE` lets the prior variance follow mean
+expression, as recommended for log-CPM data.
+
+```{r}
+#| label: limma
+group_factor <- factor(sample_info$treatment, levels = grp_levels)
+design <- model.matrix(~ 0 + group_factor + sex + plate, data = sample_info)
+colnames(design) <- make.names(sub("group_factor", "", colnames(design)))
+contrasts <- limma::makeContrasts(lithium = Lithium - no.Lithium,
+                                  diagnosis = no.Lithium - Control, levels = design)
+fit <- limma::lmFit(expression_matrix, design)
+fit <- limma::eBayes(limma::contrasts.fit(fit, contrasts), trend = TRUE)
+limma_results <- limma::topTable(fit, coef = "lithium", number = Inf)       # BH
+diagnosis_results <- limma::topTable(fit, coef = "diagnosis", number = Inf)
+head(limma_results)
+```
+
+::: {.callout-tip title="Exercise 3 · Covariates change the answer"}
+(a) How many genes pass FDR < 0.05 for lithium, and for diagnosis? How many
+lithium DEGs also have |logFC| > 0.5?
+(b) Re-fit the lithium contrast **without** sex and plate. How many genes pass now?
+(c) How many of the 2,000 network genes are lithium DEGs?
+:::
+
+```{r}
+#| label: ex3-task
+#| eval: false
+sum(limma_results$adj.P.Val < ___)
+sum(___$adj.P.Val < 0.05)
+sum(limma_results$adj.P.Val < 0.05 & abs(limma_results$logFC) > ___)
+
+design0 <- model.matrix(~ 0 + group_factor)
+colnames(design0) <- c("Control", "no.Lithium", "Lithium")
+fit0 <- limma::lmFit(expression_matrix, ___)
+fit0 <- limma::eBayes(limma::contrasts.fit(fit0, limma::makeContrasts(
+  Lithium - no.Lithium, levels = design0)), trend = TRUE)
+sum(limma::topTable(fit0, number = Inf)$adj.P.Val < 0.05)
+
+sum(limma_results[___, "adj.P.Val"] < 0.05)
+```
+
+::: {.callout-note collapse="true" title="Show solution"}
+```{r}
+#| label: ex3-solution
+deg <- rownames(limma_results)[limma_results$adj.P.Val < 0.05]
+design0 <- model.matrix(~ 0 + group_factor)
+colnames(design0) <- c("Control", "no.Lithium", "Lithium")
+fit0 <- limma::lmFit(expression_matrix, design0)
+fit0 <- limma::eBayes(limma::contrasts.fit(fit0, limma::makeContrasts(
+  Lithium - no.Lithium, levels = design0)), trend = TRUE)
+c(lithium_fdr_0.05 = length(deg),
+  diagnosis_fdr_0.05 = sum(diagnosis_results$adj.P.Val < 0.05),
+  fdr_and_lfc_0.5 = sum(limma_results$adj.P.Val < 0.05 & abs(limma_results$logFC) > 0.5),
+  without_covariates = sum(limma::topTable(fit0, number = Inf)$adj.P.Val < 0.05),
+  degs_in_network = sum(selected_genes %in% deg))
+
+ggplot(limma_results, aes(logFC, -log10(P.Value), color = adj.P.Val < 0.05)) +
+  geom_point(alpha = 0.6, size = 1) +
+  scale_color_manual(values = c(`FALSE` = "#5E4E56", `TRUE` = pal$rose),
+                     labels = c("FDR ≥ 0.05", "FDR < 0.05")) +
+  labs(title = "Lithium vs no lithium (adjusted for sex and plate)", color = NULL)
+```
+
+Thousands of genes pass FDR for lithium, but few change by more than ~1.4-fold:
+with 338 samples, small shifts are detectable. The diagnosis contrast finds
+fewer. Leaving out sex and plate adds noise and changes the answer. DEGs are **under-represented** among the most variable
+genes (`r round(100 * mean(selected_genes %in% deg))`% of the network genes vs
+`r round(100 * length(deg) / nrow(limma_results))`% genome-wide): in blood,
+variance is dominated by differences between people (HLA genotype, cell mix),
+not by lithium. We come back to this overlap at the end.
+:::
+
+# WGCNA
+
+```{r}
+#| label: wgcna
+invisible(capture.output(power_fit <- WGCNA::pickSoftThreshold(
+  dat_expr, powerVector = c(1:10, seq(12, 20, 2)), networkType = "signed", verbose = 0)))
+soft_power <- power_fit$powerEstimate   # lowest power with scale-free R^2 >= 0.85
+soft_power
+wgcna_fit <- WGCNA::blockwiseModules(
+  dat_expr, power = soft_power, networkType = "signed", TOMType = "signed",
+  minModuleSize = 20, mergeCutHeight = 0.25, maxBlockSize = 5000,
+  randomSeed = 20261109, verbose = 0
+)
+module_colors <- as.character(wgcna_fit$colors)  # already colour names
+names(module_colors) <- colnames(dat_expr)
+module_eigengenes <- WGCNA::orderMEs(wgcna_fit$MEs)
+table(module_colors)
+```
+
+::: {.callout-tip title="Exercise 4 · Sensitivity to the soft threshold"}
+Re-run WGCNA with `power = 6`, below the scale-free plateau. How many modules do you get, and how large is
+the grey (unassigned) group? What does a lower power do to weak links?
+:::
+
+```{r}
+#| label: ex4-task
+#| eval: false
+fit12 <- WGCNA::blockwiseModules(
+  dat_expr, power = ___, networkType = "signed", TOMType = "signed",
+  minModuleSize = 20, mergeCutHeight = 0.25, maxBlockSize = 5000,
+  randomSeed = 20261109, verbose = 0
+)
+table(as.character(fit12$colors))
+```
+
+::: {.callout-note collapse="true" title="Show solution"}
+```{r}
+#| label: ex4-solution
+fit12 <- WGCNA::blockwiseModules(
+  dat_expr, power = 6, networkType = "signed", TOMType = "signed",
+  minModuleSize = 20, mergeCutHeight = 0.25, maxBlockSize = 5000,
+  randomSeed = 20261109, verbose = 0
+)
+cmp <- tibble(
+  power = c(soft_power, 6),
+  modules = c(length(setdiff(unique(module_colors), "grey")),
+              length(setdiff(unique(as.character(fit12$colors)), "grey"))),
+  grey_genes = c(sum(module_colors == "grey"),
+                 sum(as.character(fit12$colors) == "grey"))
+)
+cmp
+```
+
+The power changes the partition: here β = 6 gives
+`r cmp$modules[2]` modules and `r cmp$grey_genes[2]` grey genes, against
+`r cmp$modules[1]` and `r cmp$grey_genes[1]` at β = `r soft_power`. A lower power
+keeps more weak correlations, so the topological overlap is flatter and branch
+boundaries in the tree shift. Module boundaries are a **choice**, so report
+them.
+:::
+
+::: {.callout-tip title="Exercise 5 · Module–trait association and hubs"}
+Which module eigengene correlates most strongly with lithium treatment? List
+its 10 genes with the highest module membership (kME).
+:::
+
+```{r}
+#| label: ex5-task
+#| eval: false
+case_indicator <- as.numeric(sample_info$treatment == "Lithium")
+module_trait <- cor(module_eigengenes, ___)
+mt <- module_trait[rownames(module_trait) != "MEgrey", , drop = FALSE]  # skip unassigned
+top_module <- rownames(mt)[which.max(abs(mt[, 1]))]
+kme <- WGCNA::signedKME(dat_expr, module_eigengenes)
+top_color <- sub("^ME", "", top_module)
+in_mod <- module_colors == top_color
+kme_mod <- setNames(kme[[paste0("kME", ___)]], rownames(kme))[in_mod]
+head(sort(kme_mod, decreasing = TRUE), 10)
+```
+
+::: {.callout-note collapse="true" title="Show solution"}
+```{r}
+#| label: ex5-solution
+case_indicator <- as.numeric(sample_info$treatment == "Lithium")
+module_trait <- cor(module_eigengenes, case_indicator)
+module_trait[order(-abs(module_trait[, 1])), , drop = FALSE]
+mt <- module_trait[rownames(module_trait) != "MEgrey", , drop = FALSE]  # skip unassigned
+top_module <- rownames(mt)[which.max(abs(mt[, 1]))]
+kme <- WGCNA::signedKME(dat_expr, module_eigengenes)
+top_color <- sub("^ME", "", top_module)
+in_mod <- module_colors == top_color
+kme_mod <- setNames(kme[[paste0("kME", top_color)]], rownames(kme))[in_mod]
+hubs <- head(sort(kme_mod, decreasing = TRUE), 10)
+tibble(gene = names(hubs), kME = round(hubs, 3))
+```
+
+These intramodular hubs are the genes most representative of the module's
+expression pattern; they are candidates, not proven regulators.
+:::
+
+# ARACNE
+
+```{r}
+#| label: aracne
+mi_matrix <- minet::build.mim(dat_expr, estimator = "spearman")
+aracne_matrix <- minet::aracne(mi_matrix, eps = 0)
+aracne_degree <- rowSums(aracne_matrix > 0)
+c(edges = sum(aracne_matrix > 0) / 2)
+```
+
+::: {.callout-tip title="Exercise 6 · Do ARACNE hubs and WGCNA hubs agree?"}
+Take the 50 genes with the highest ARACNE degree. Which WGCNA modules do they
+belong to? How many of the trait-associated module's top-50 kME genes are also
+ARACNE hubs?
+:::
+
+```{r}
+#| label: ex6-task
+#| eval: false
+aracne_hubs <- names(sort(aracne_degree, decreasing = TRUE))[1:___]
+table(module_colors[aracne_hubs])
+kme_top50 <- names(head(sort(kme_mod, decreasing = TRUE), 50))  # whole module if smaller
+length(intersect(___, ___))
+```
+
+::: {.callout-note collapse="true" title="Show solution"}
+```{r}
+#| label: ex6-solution
+aracne_hubs <- names(sort(aracne_degree, decreasing = TRUE))[1:50]
+table(module_colors[aracne_hubs])
+kme_top50 <- names(head(sort(kme_mod, decreasing = TRUE), 50))  # whole module if smaller
+length(intersect(aracne_hubs, kme_top50))
+```
+
+Here `r length(intersect(aracne_hubs, kme_top50))` genes are hubs in both. The
+two methods define importance differently: a WGCNA hub sits at the centre of
+one module, while ARACNE's pruning removes indirect links, so its hubs are genes
+with many **direct**, non-redundant partners, often bridging modules (look at
+the module table above). Little overlap is common; genes found by both are the
+more robust candidates.
+:::
+
+# wTO networks per group
+
+wTO is computed **separately** for each group (controls, patients off lithium,
+patients on lithium) on all 2,000 genes with 100
+bootstrap resamples. The p-value measures stability: the share of resamples in
+which a link moved by more than `delta = 0.2`.
+
+```{r}
+#| label: wto
+wto_nets <- load_wto_networks(network_matrix, sample_info, n = 100)
+sapply(wto_nets[c("control", "no_lithium", "lithium")],
+       function(x) sum(x$pval.adj < 0.05))   # stable links per group
+head(wto_nets$lithium)
+```
+
+::: {.callout-tip title="Exercise 7 · Strongest links and sign flips"}
+List the 10 strongest links (largest |wTO|) among stable links
+(`pval.adj < 0.05`) in the control and in the lithium network. How many pairs
+are stable in both but have opposite signs?
+:::
+
+```{r}
+#| label: ex7-task
+#| eval: false
+stable <- function(x) x[x$pval.adj < ___, ]
+stable(wto_nets$control) |> arrange(desc(abs(wTO))) |> head(10)
+both <- inner_join(stable(wto_nets$control), stable(wto_nets$lithium),
+                   by = c("Node.1", "Node.2"), suffix = c(".ctrl", ".li"))
+sum(sign(both$wTO.ctrl) != sign(___))
+```
+
+::: {.callout-note collapse="true" title="Show solution"}
+```{r}
+#| label: ex7-solution
+stable <- function(x) x[x$pval.adj < 0.05, ]
+stable(wto_nets$control) |> arrange(desc(abs(wTO))) |> head(10)
+stable(wto_nets$lithium) |> arrange(desc(abs(wTO))) |> head(10)
+both <- inner_join(stable(wto_nets$control), stable(wto_nets$lithium),
+                   by = c("Node.1", "Node.2"), suffix = c(".ctrl", ".li"))
+c(stable_in_both = nrow(both),
+  sign_flips = sum(sign(both$wTO.ctrl) != sign(both$wTO.li)))
+```
+
+Sign flips are the raw material of CoDiNA's **β** class. Lithium was not
+randomized, so treat them as hypotheses.
+:::
+
+# Consensus network
+
+A consensus asks which links are **robust across related networks**. Patients
+off and on lithium share the disease and differ in treatment, so their
+consensus is a **bipolar-disorder network** that does not depend on lithium.
+
+```{r}
+#| label: consensus
+as_wto_input <- function(x) data.frame(Node.1 = factor(x$Node.1), Node.2 = factor(x$Node.2),
+                                       wTO = x$wTO, pval = x$pval)
+consensus <- wTO::wTO.Consensus(list(as_wto_input(wto_nets$no_lithium),
+                                     as_wto_input(wto_nets$lithium)))
+head(consensus)
+```
+
+::: {.callout-tip title="Exercise 8 · The bipolar consensus"}
+Keep links with |CN| ≥ 0.3 and a BH-adjusted Fisher p < 0.05 (on 2,000 genes, wTO
+rarely exceeds 0.4). How many are there? How many of them are **strong
+(|ω| ≥ 0.3) and same-signed in both** patient groups, and how many are carried
+by only one?
+:::
+
+```{r}
+#| label: ex8-task
+#| eval: false
+robust <- consensus |>
+  mutate(padj = p.adjust(pval.fisher, "BH")) |>
+  filter(abs(CN) >= ___, padj < ___)
+ab <- inner_join(wto_nets$no_lithium, wto_nets$lithium,
+                 by = c("Node.1", "Node.2"), suffix = c(".off", ".on")) |>
+  semi_join(robust |> mutate(across(c(Node.1, Node.2), as.character)),
+            by = c("Node.1", "Node.2"))
+table(agrees = sign(ab$wTO.off) == sign(ab$wTO.on) &
+        pmin(abs(ab$wTO.off), abs(ab$wTO.on)) >= ___)
+```
+
+::: {.callout-note collapse="true" title="Show solution"}
+```{r}
+#| label: ex8-solution
+robust <- consensus |>
+  mutate(padj = p.adjust(pval.fisher, "BH")) |>
+  filter(abs(CN) >= 0.3, padj < 0.05)
+nrow(robust)
+ab <- inner_join(wto_nets$no_lithium, wto_nets$lithium,
+                 by = c("Node.1", "Node.2"), suffix = c(".off", ".on")) |>
+  semi_join(robust |> mutate(across(c(Node.1, Node.2), as.character)),
+            by = c("Node.1", "Node.2")) |>
+  mutate(agrees = sign(wTO.off) == sign(wTO.on) & pmin(abs(wTO.off), abs(wTO.on)) >= 0.3)
+table(ab$agrees)
+set.seed(3)
+ggplot(ab |> slice_sample(n = min(8000, nrow(ab))), aes(wTO.off, wTO.on, color = agrees)) +
+  geom_point(alpha = 0.5, size = 0.8) +
+  scale_color_manual(values = c(`FALSE` = pal$rose, `TRUE` = pal$gold),
+                     labels = c("carried by one group", "agrees in both")) +
+  coord_equal() +
+  labs(title = "Bipolar consensus links: off vs on lithium",
+       x = "wTO · no Lithium", y = "wTO · Lithium", color = NULL)
+```
+
+Weighting by |ω| lets the stronger network dominate: a link that is strong in
+one group and weak in the other still gets a large CN and a small Fisher p.
+Always check per-network agreement. The links that agree form the shared
+bipolar network; the ones carried by one group are where CoDiNA looks for
+treatment effects.
+:::
+
+# CoDiNA
+
+With three networks, every link is a point in the cube $[-1,1]^3$ and its class
+says **where** it is present: `g.noLithium.Lithium` = both patient groups but
+not controls (disease), `g.Lithium` = only on lithium, and so on.
+
+```{r}
+#| label: codina
+to_codina <- function(x, padj = 0.05) {
+  x |> filter(pval.adj < padj) |> transmute(Node.1, Node.2, wTO)
+}
+codina_input <- lapply(wto_nets[c("control", "no_lithium", "lithium")], to_codina)
+codes <- c("Control", "noLithium", "Lithium")
+codina_result <- CoDiNA::MakeDiffNet(Data = codina_input, Code = codes,
+                                     cutoff = 0.33, stretch = TRUE)
+sort(table(codina_result$Phi_tilde), decreasing = TRUE)
+```
+
+::: {.callout-tip title="Exercise 9 · Why stretch?"}
+The three networks come from 112, 74 and 152 samples. Compare their |wTO|
+distributions, then re-run `MakeDiffNet()` with `stretch = FALSE`. How do the
+γ classes change, and why?
+:::
+
+```{r}
+#| label: ex9-task
+#| eval: false
+sapply(wto_nets[c("control", "no_lithium", "lithium")],
+       function(x) quantile(abs(x$wTO), ___))
+codina_raw <- CoDiNA::MakeDiffNet(Data = codina_input, Code = codes,
+                                  cutoff = 0.33, stretch = ___)
+sort(table(codina_raw$Phi_tilde), decreasing = TRUE)
+```
+
+::: {.callout-note collapse="true" title="Show solution"}
+```{r}
+#| label: ex9-solution
+sapply(wto_nets[c("control", "no_lithium", "lithium")],
+       function(x) quantile(abs(x$wTO), c(0.5, 0.9, 0.99)))
+codina_raw <- CoDiNA::MakeDiffNet(Data = codina_input, Code = codes,
+                                  cutoff = 0.33, stretch = FALSE)
+full_join(as.data.frame(table(Phi_tilde = codina_result$Phi_tilde)),
+          as.data.frame(table(Phi_tilde = codina_raw$Phi_tilde)),
+          by = "Phi_tilde", suffix = c(".stretch", ".raw"))
+```
+
+The networks do not share one scale: the 74-patient network sits highest
+across its whole |wTO| distribution. On the raw scale, links cross the 0.33
+threshold most often in that group, so the γ links pile up in `g.noLithium` and
+most other classes shrink. `stretch = TRUE` rescales each network by its own
+maximum |wTO| before discretizing. Group size is one reason for the different
+scales (correlations from fewer samples are noisier, and noise inflates
+|r|); real differences in co-expression are another. A stricter check is to
+subsample every group to the same size and rebuild the networks.
+:::
+
+::: {.callout-tip title="Exercise 10 · From links to genes"}
+Use `ClusterNodes()` to assign genes to CoDiNA classes. Which genes are
+**disease** genes (`g.noLithium.Lithium`) and which are **lithium-only**
+(`g.Lithium`)?
+:::
+
+```{r}
+#| label: ex10-task
+#| eval: false
+codina_nodes <- CoDiNA::ClusterNodes(codina_result, cutoff.external = ___,
+                                     cutoff.internal = ___)
+table(codina_nodes$Phi_tilde)
+disease_genes <- codina_nodes$Node[codina_nodes$Phi_tilde == ___]
+case_genes <- codina_nodes$Node[codina_nodes$Phi_tilde == ___]
+```
+
+::: {.callout-note collapse="true" title="Show solution"}
+```{r}
+#| label: ex10-solution
+codina_nodes <- CoDiNA::ClusterNodes(codina_result, cutoff.external = 0,
+                                     cutoff.internal = 1)
+sort(table(codina_nodes$Phi_tilde), decreasing = TRUE)
+disease_genes <- as.character(codina_nodes$Node[codina_nodes$Phi_tilde == "g.noLithium.Lithium"])
+case_genes <- as.character(codina_nodes$Node[codina_nodes$Phi_tilde == "g.Lithium"])
+c(disease = length(disease_genes), lithium_only = length(case_genes))
+head(disease_genes, 15)
+```
+
+`ClusterNodes()` counts each gene's links per class and keeps the class only
+when a chi-square test says the links concentrate there (BH < 0.05); otherwise
+the gene is "U" (unclassified). Disease genes are connected in **both** patient
+groups but not in controls, so lithium cannot explain them; lithium-only genes
+gain partners only in treated patients.
+:::
+
+# Functional enrichment
+
+::: {.callout-tip title="Exercise 11 · The background matters"}
+Run GO Biological Process ORA on the lithium-only (`g.Lithium`) genes twice: once with the
+2,000 network genes as universe, once without a universe (whole annotated
+genome). Compare the number of terms with FDR < 0.05.
+:::
+
+```{r}
+#| label: ex11-task
+#| eval: false
+to_entrez <- function(symbols) clusterProfiler::bitr(
+  symbols, fromType = "SYMBOL", toType = "ENTREZID", OrgDb = org.Hs.eg.db::org.Hs.eg.db)
+ora <- function(genes, universe = NULL) clusterProfiler::enrichGO(
+  gene = unique(to_entrez(genes)$ENTREZID),
+  universe = if (is.null(universe)) NULL else unique(to_entrez(universe)$ENTREZID),
+  OrgDb = org.Hs.eg.db::org.Hs.eg.db, keyType = "ENTREZID", ont = "BP",
+  pAdjustMethod = "BH", pvalueCutoff = 1, qvalueCutoff = 1)
+sum(as.data.frame(ora(case_genes, ___))$p.adjust < 0.05)
+sum(as.data.frame(ora(case_genes))$p.adjust < 0.05)
+```
+
+::: {.callout-note collapse="true" title="Show solution"}
+```{r}
+#| label: ex11-solution
+to_entrez <- function(symbols) clusterProfiler::bitr(
+  symbols, fromType = "SYMBOL", toType = "ENTREZID", OrgDb = org.Hs.eg.db::org.Hs.eg.db)
+ora <- function(genes, universe = NULL) clusterProfiler::enrichGO(
+  gene = unique(to_entrez(genes)$ENTREZID),
+  universe = if (is.null(universe)) NULL else unique(to_entrez(universe)$ENTREZID),
+  OrgDb = org.Hs.eg.db::org.Hs.eg.db, keyType = "ENTREZID", ont = "BP",
+  pAdjustMethod = "BH", pvalueCutoff = 1, qvalueCutoff = 1)
+ora_universe <- ora(case_genes, selected_genes)
+ora_genome <- ora(case_genes)
+c(network_universe = sum(as.data.frame(ora_universe)$p.adjust < 0.05),
+  whole_genome = sum(as.data.frame(ora_genome)$p.adjust < 0.05))
+head(as.data.frame(ora_universe)[, c("Description", "GeneRatio", "p.adjust")], 10)
+```
+
+The two runs ask different questions. Against the 2,000 network genes:
+are the `g.Lithium` genes special **among variable blood genes**? Against the whole
+genome: are they special **among all annotated genes**? The genome background
+adds thousands of genes and tests, so terms can appear or disappear in either
+direction. Always report the universe you used.
+:::
+
+::: {.callout-tip title="Exercise 12 · GSEA on module membership"}
+Rank all 2,000 genes by kME for the trait-associated module and run `gseGO()`.
+Which terms have the largest positive NES?
+:::
+
+```{r}
+#| label: ex12-task
+#| eval: false
+rank_vec <- sort(setNames(kme[, paste0("kME", ___)], rownames(kme)), decreasing = TRUE)
+```
+
+::: {.callout-note collapse="true" title="Show solution"}
+```{r}
+#| label: ex12-solution
+rank_vec <- sort(setNames(kme[, paste0("kME", top_color)], rownames(kme)), decreasing = TRUE)
+rank_map <- to_entrez(names(rank_vec))
+rank_tbl <- tibble(SYMBOL = names(rank_vec), score = rank_vec) |>
+  inner_join(rank_map, by = "SYMBOL") |> distinct(ENTREZID, .keep_all = TRUE)
+gene_list <- sort(setNames(rank_tbl$score, rank_tbl$ENTREZID), decreasing = TRUE)
+gsea <- clusterProfiler::gseGO(gene_list, OrgDb = org.Hs.eg.db::org.Hs.eg.db,
+                               ont = "BP", keyType = "ENTREZID", pvalueCutoff = 0.05,
+                               seed = TRUE, verbose = FALSE)
+as.data.frame(gsea) |> arrange(desc(NES)) |>
+  select(Description, setSize, NES, p.adjust) |> head(10)
+```
+:::
+
+# Comparing outcomes
+
+::: {.callout-tip title="Exercise 13 · Do DE and networks point at the same genes?"}
+For each of the 2,000 network genes, record whether it is a lithium **DEG**
+(FDR < 0.05), a **WGCNA hub** of the trait-associated module (top 50 kME), an
+**ARACNE hub** (top 50 degree), and **lithium-only** in CoDiNA (`g.Lithium`).
+How many genes are flagged by DE only, by a network method only, or by both?
+Then ask the disease question: how many CoDiNA disease genes
+(`g.noLithium.Lithium`) are **diagnosis** DEGs?
+:::
+
+```{r}
+#| label: ex13-task
+#| eval: false
+flags <- tibble(gene = selected_genes) |>
+  mutate(DEG = gene %in% ___,
+         WGCNA_hub = gene %in% names(head(sort(kme_mod, decreasing = TRUE), 50)),
+         ARACNE_hub = gene %in% aracne_hubs,
+         CoDiNA_lithium = gene %in% ___)
+flags |> mutate(network = WGCNA_hub | ARACNE_hub | CoDiNA_lithium) |> count(DEG, network)
+```
+
+::: {.callout-note collapse="true" title="Show solution"}
+```{r}
+#| label: ex13-solution
+wgcna_hubs <- names(head(sort(kme_mod, decreasing = TRUE), 50))
+flags <- tibble(gene = selected_genes) |>
+  mutate(DEG = gene %in% deg,
+         WGCNA_hub = gene %in% wgcna_hubs,
+         ARACNE_hub = gene %in% aracne_hubs,
+         CoDiNA_lithium = gene %in% case_genes)
+flags |> mutate(network = WGCNA_hub | ARACNE_hub | CoDiNA_lithium) |> count(DEG, network)
+
+# DEG rate inside each network gene set vs the 2,000-gene background
+flags |>
+  summarise(across(c(WGCNA_hub, ARACNE_hub, CoDiNA_lithium),
+                   ~ mean(DEG[.x]), .names = "{.col}")) |>
+  mutate(all_network_genes = mean(flags$DEG))
+flags |> filter(DEG, WGCNA_hub | CoDiNA_lithium) |> head(10)
+
+# the disease question: CoDiNA disease genes vs diagnosis DEGs
+dx_deg <- rownames(diagnosis_results)[diagnosis_results$adj.P.Val < 0.05]
+c(disease_genes = length(disease_genes),
+  also_diagnosis_DEG = sum(disease_genes %in% dx_deg),
+  rate_disease_genes = mean(disease_genes %in% dx_deg),
+  rate_all_network_genes = mean(selected_genes %in% dx_deg))
+```
+
+The methods answer different questions, so the lists overlap only partly.
+Genes flagged by **both** DE and a network method are the strongest
+candidates; network-only genes are where co-expression adds something DE
+cannot see.
+:::
+
+# Reflection
+
+1. Which of your results would you trust enough to plan an experiment around,
+   and which need an independent cohort first?
+2. Name one parameter whose change altered your conclusions, and how you would
+   report it.
+3. Pick one gene that appears in several analyses (DE, WGCNA hub, ARACNE hub,
+   CoDiNA class). What hypothesis would you test for it?
+
+```{r}
+#| label: session
+#| code-fold: true
+sessionInfo()
+```
