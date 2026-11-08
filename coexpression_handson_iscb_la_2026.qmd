@@ -36,10 +36,15 @@ if (!isTRUE(l10n_info()$`UTF-8`)) invisible(Sys.setlocale("LC_CTYPE", "en_US.UTF
 ```
 
 ::: {.lead}
-This notebook follows the lecture step by step. Run each chunk in order in
-RStudio (or Positron). Each **Exercise** box asks you to change one thing and
-interpret the result; fill the `___` blanks in the exercise chunk, run it, and
-only then open **Show solution**.
+Lithium has been used to treat bipolar disorder for more than 70 years, and we
+still do not fully understand what it does. In this notebook we follow one
+question from raw data to biology: **what does lithium change in how blood
+genes vary together, and can we tell that apart from the disease itself?**
+
+The notebook follows the lecture step by step. Run the chunks in order in
+RStudio (or Positron). Each **Exercise** asks you to change one thing and look
+at what happens: fill the `___` blanks, run the chunk, and only then open
+**Show solution**.
 :::
 
 ::: {.callout-important title="Before you start · run it again"}
@@ -107,10 +112,12 @@ cond_cols <- c(Control = pal$gold, `no Lithium` = pal$teal, Lithium = pal$rose)
 
 The data are whole-blood RNA-seq from **GSE124326** (Krebs *et al.*, 2020):
 112 **controls** and 226 patients with bipolar I disorder, 152 taking
-**lithium** and 74 not taking it. Three groups give three networks.
+**lithium** and 74 not taking it. Having three groups is what makes the story
+work later: links shared by both patient groups point to the disease, and
+links seen only on lithium point to the drug.
 The prepared file holds log2-CPM values (genes x samples) and one row of
 metadata per sample, including sex, sequencing plate, and estimated blood-cell
-fractions.
+fractions. Before any modelling, we look at what actually drives the data.
 
 ```{r}
 #| label: load
@@ -167,8 +174,10 @@ the limma model and are removed before building networks.
 
 # Gene selection
 
-Network methods scale with the square of the number of genes, and genes that
-barely vary contribute mostly noise correlations. We first remove the plate
+Exercise 1 showed that plate and sex are loud. Before building networks we
+decide which genes go in, and we keep those technical signals out. Network
+methods scale with the square of the number of genes, and genes that barely
+vary contribute mostly noise correlations. We first remove the plate
 and sex effects (keeping the group effects), keep **expressed** genes (mean
 log-CPM ≥ 2; at low counts, log values vary mostly by sampling noise), and then
 keep the **2,000 most variable** of them. This filter ignores the condition labels, so later
@@ -255,13 +264,13 @@ structure: ask what drives it. That cell-mix axis is also why the lithium
 contrast, which raises neutrophils, needs care.
 :::
 
-# Differential expression with limma
+# A quick baseline: differential expression
 
-limma tests **all** expressed genes, with sex and plate as covariates. One model
-answers two questions: **lithium** (on vs off lithium, within bipolar disorder)
-and **diagnosis** (patients off lithium vs controls, so the drug does not leak
-into the disease contrast). `trend = TRUE` lets the prior variance follow mean
-expression, as recommended for log-CPM data.
+DE is not the focus today, but it gives us something to compare the networks
+against at the end. One limma model, on all expressed genes and adjusted for
+sex and plate, answers two questions: **lithium** (on vs off, within bipolar
+disorder) and **diagnosis** (patients off lithium vs controls, so the drug
+does not leak into the disease contrast).
 
 ```{r}
 #| label: limma
@@ -274,14 +283,12 @@ fit <- limma::lmFit(expression_matrix, design)
 fit <- limma::eBayes(limma::contrasts.fit(fit, contrasts), trend = TRUE)
 limma_results <- limma::topTable(fit, coef = "lithium", number = Inf)       # BH
 diagnosis_results <- limma::topTable(fit, coef = "diagnosis", number = Inf)
-head(limma_results)
+deg <- rownames(limma_results)[limma_results$adj.P.Val < 0.05]   # lithium DEGs
 ```
 
-::: {.callout-tip title="Exercise 3 · Covariates change the answer"}
-(a) How many genes pass FDR < 0.05 for lithium, and for diagnosis? How many
-lithium DEGs also have |logFC| > 0.5?
-(b) Re-fit the lithium contrast **without** sex and plate. How many genes pass now?
-(c) How many of the 2,000 network genes are lithium DEGs?
+::: {.callout-tip title="Exercise 3 · How much of the DE signal reaches the network?"}
+How many genes pass FDR < 0.05 for lithium, and for diagnosis? How many of
+the 2,000 network genes are lithium DEGs?
 :::
 
 ```{r}
@@ -289,50 +296,31 @@ lithium DEGs also have |logFC| > 0.5?
 #| eval: false
 sum(limma_results$adj.P.Val < ___)
 sum(___$adj.P.Val < 0.05)
-sum(limma_results$adj.P.Val < 0.05 & abs(limma_results$logFC) > ___)
-
-design0 <- model.matrix(~ 0 + group_factor)
-colnames(design0) <- c("Control", "no.Lithium", "Lithium")
-fit0 <- limma::lmFit(expression_matrix, ___)
-fit0 <- limma::eBayes(limma::contrasts.fit(fit0, limma::makeContrasts(
-  Lithium - no.Lithium, levels = design0)), trend = TRUE)
-sum(limma::topTable(fit0, number = Inf)$adj.P.Val < 0.05)
-
-sum(limma_results[___, "adj.P.Val"] < 0.05)
+sum(selected_genes %in% ___)
 ```
 
 ::: {.callout-note collapse="true" title="Show solution"}
 ```{r}
 #| label: ex3-solution
-deg <- rownames(limma_results)[limma_results$adj.P.Val < 0.05]
-design0 <- model.matrix(~ 0 + group_factor)
-colnames(design0) <- c("Control", "no.Lithium", "Lithium")
-fit0 <- limma::lmFit(expression_matrix, design0)
-fit0 <- limma::eBayes(limma::contrasts.fit(fit0, limma::makeContrasts(
-  Lithium - no.Lithium, levels = design0)), trend = TRUE)
 c(lithium_fdr_0.05 = length(deg),
   diagnosis_fdr_0.05 = sum(diagnosis_results$adj.P.Val < 0.05),
-  fdr_and_lfc_0.5 = sum(limma_results$adj.P.Val < 0.05 & abs(limma_results$logFC) > 0.5),
-  without_covariates = sum(limma::topTable(fit0, number = Inf)$adj.P.Val < 0.05),
   degs_in_network = sum(selected_genes %in% deg))
-
-ggplot(limma_results, aes(logFC, -log10(P.Value), color = adj.P.Val < 0.05)) +
-  geom_point(alpha = 0.6, size = 1) +
-  scale_color_manual(values = c(`FALSE` = "#5E4E56", `TRUE` = pal$rose),
-                     labels = c("FDR ≥ 0.05", "FDR < 0.05")) +
-  labs(title = "Lithium vs no lithium (adjusted for sex and plate)", color = NULL)
 ```
 
-Thousands of genes pass FDR for lithium, but few change by more than ~1.4-fold:
-with 338 samples, small shifts are detectable. The diagnosis contrast finds
-fewer. Leaving out sex and plate adds noise and changes the answer. DEGs are **under-represented** among the most variable
-genes (`r round(100 * mean(selected_genes %in% deg))`% of the network genes vs
+Thousands of genes pass FDR for lithium, mostly with small fold changes: with
+338 samples, small shifts are detectable. The diagnosis contrast finds fewer.
+DEGs are **under-represented** among the most variable genes
+(`r round(100 * mean(selected_genes %in% deg))`% of the network genes vs
 `r round(100 * length(deg) / nrow(limma_results))`% genome-wide): in blood,
 variance is dominated by differences between people (HLA genotype, cell mix),
 not by lithium. We come back to this overlap at the end.
 :::
 
 # WGCNA
+
+Now the first network. WGCNA builds **one** signed network from all 338
+samples and groups the 2,000 genes into modules. The groups come back in only
+afterwards, when we ask which module eigengene follows lithium.
 
 ```{r}
 #| label: wgcna
@@ -359,18 +347,18 @@ the grey (unassigned) group? What does a lower power do to weak links?
 ```{r}
 #| label: ex4-task
 #| eval: false
-fit12 <- WGCNA::blockwiseModules(
+fit6 <- WGCNA::blockwiseModules(
   dat_expr, power = ___, networkType = "signed", TOMType = "signed",
   minModuleSize = 20, mergeCutHeight = 0.25, maxBlockSize = 5000,
   randomSeed = 20261109, verbose = 0
 )
-table(as.character(fit12$colors))
+table(as.character(fit6$colors))
 ```
 
 ::: {.callout-note collapse="true" title="Show solution"}
 ```{r}
 #| label: ex4-solution
-fit12 <- WGCNA::blockwiseModules(
+fit6 <- WGCNA::blockwiseModules(
   dat_expr, power = 6, networkType = "signed", TOMType = "signed",
   minModuleSize = 20, mergeCutHeight = 0.25, maxBlockSize = 5000,
   randomSeed = 20261109, verbose = 0
@@ -378,9 +366,9 @@ fit12 <- WGCNA::blockwiseModules(
 cmp <- tibble(
   power = c(soft_power, 6),
   modules = c(length(setdiff(unique(module_colors), "grey")),
-              length(setdiff(unique(as.character(fit12$colors)), "grey"))),
+              length(setdiff(unique(as.character(fit6$colors)), "grey"))),
   grey_genes = c(sum(module_colors == "grey"),
-                 sum(as.character(fit12$colors) == "grey"))
+                 sum(as.character(fit6$colors) == "grey"))
 )
 cmp
 ```
@@ -389,8 +377,8 @@ The power changes the partition: here β = 6 gives
 `r cmp$modules[2]` modules and `r cmp$grey_genes[2]` grey genes, against
 `r cmp$modules[1]` and `r cmp$grey_genes[1]` at β = `r soft_power`. A lower power
 keeps more weak correlations, so the topological overlap is flatter and branch
-boundaries in the tree shift. Module boundaries are a **choice**, so report
-them.
+boundaries in the tree shift. Where one module ends and the next begins is
+partly your choice, so report the power you used.
 :::
 
 ::: {.callout-tip title="Exercise 5 · Module–trait association and hubs"}
@@ -428,11 +416,17 @@ hubs <- head(sort(kme_mod, decreasing = TRUE), 10)
 tibble(gene = names(hubs), kME = round(hubs, 3))
 ```
 
-These intramodular hubs are the genes most representative of the module's
-expression pattern; they are candidates, not proven regulators.
+These intramodular hubs are the genes that best represent the module's
+expression pattern. They are the first genes to follow up, but being central
+does not make a gene a regulator.
 :::
 
 # ARACNE
+
+WGCNA keeps every link and weights it. ARACNE does the opposite: it scores each
+pair by mutual information and then removes the links that look indirect,
+leaving a sparse network. Same 2,000 genes, same samples, a different idea of
+what a link is.
 
 ```{r}
 #| label: aracne
@@ -476,7 +470,10 @@ more robust candidates.
 
 # wTO networks per group
 
-wTO is computed **separately** for each group (controls, patients off lithium,
+So far we have built one network for everybody. To see what lithium changes, we
+need one network **per group**, and a link score that keeps its sign, so that
+a pair going up together can be told apart from a pair moving in opposite
+directions. wTO is computed **separately** for each group (controls, patients off lithium,
 patients on lithium) on all 2,000 genes with 100
 bootstrap resamples. The p-value measures stability: the share of resamples in
 which a link moved by more than `delta = 0.2`.
@@ -582,14 +579,15 @@ ggplot(ab |> slice_sample(n = min(8000, nrow(ab))), aes(wTO.off, wTO.on, color =
 
 Weighting by |ω| lets the stronger network dominate: a link that is strong in
 one group and weak in the other still gets a large CN and a small Fisher p.
-Always check per-network agreement. The links that agree form the shared
+So look at each network before calling a link shared. The links that agree form the shared
 bipolar network; the ones carried by one group are where CoDiNA looks for
 treatment effects.
 :::
 
 # CoDiNA
 
-With three networks, every link is a point in the cube $[-1,1]^3$ and its class
+The consensus kept what the two patient groups share. CoDiNA looks at all three
+groups at once and asks what is **different**. With three networks, every link is a point in the cube $[-1,1]^3$ and its class
 says **where** it is present: `g.noLithium.Lithium` = both patient groups but
 not controls (disease), `g.Lithium` = only on lithium, and so on.
 
@@ -680,6 +678,10 @@ gain partners only in treated patients.
 
 # Functional enrichment
 
+We now have several gene lists: modules, hubs, disease genes, and lithium-only
+genes. Enrichment asks what these genes might be doing. The answer depends a
+lot on what you compare them against.
+
 ::: {.callout-tip title="Exercise 11 · The background matters"}
 Run GO Biological Process ORA on the lithium-only (`g.Lithium`) genes twice: once with the
 2,000 network genes as universe, once without a universe (whole annotated
@@ -721,7 +723,7 @@ The two runs ask different questions. Against the 2,000 network genes:
 are the `g.Lithium` genes special **among variable blood genes**? Against the whole
 genome: are they special **among all annotated genes**? The genome background
 adds thousands of genes and tests, so terms can appear or disappear in either
-direction. Always report the universe you used.
+direction. Whichever you choose, report it.
 :::
 
 ::: {.callout-tip title="Exercise 12 · GSEA on module membership"}
@@ -749,9 +751,16 @@ gsea <- clusterProfiler::gseGO(gene_list, OrgDb = org.Hs.eg.db::org.Hs.eg.db,
 as.data.frame(gsea) |> arrange(desc(NES)) |>
   select(Description, setSize, NES, p.adjust) |> head(10)
 ```
+
+A positive NES means the term is concentrated among the genes most tied to the
+module. No cutoff was needed: GSEA used the whole ranking. Compare these terms
+with the hubs you listed in Exercise 5.
 :::
 
 # Comparing outcomes
+
+We end where we started, with limma. Do the networks point at the same genes
+that changed their average expression, or at different ones?
 
 ::: {.callout-tip title="Exercise 13 · Do DE and networks point at the same genes?"}
 For each of the 2,000 network genes, record whether it is a lithium **DEG**
@@ -807,12 +816,19 @@ cannot see.
 
 # Reflection
 
+Back to the question we started with: what does lithium change, and what
+belongs to the disease? You now have several partial answers. Take a few
+minutes with these:
+
 1. Which of your results would you trust enough to plan an experiment around,
    and which need an independent cohort first?
 2. Name one parameter whose change altered your conclusions, and how you would
    report it.
 3. Pick one gene that appears in several analyses (DE, WGCNA hub, ARACNE hub,
    CoDiNA class). What hypothesis would you test for it?
+
+Questions after the workshop are welcome: <deisy.gysi@ufpr.br> ·
+<https://deisygysi.github.io/>
 
 ```{r}
 #| label: session
