@@ -31,7 +31,9 @@ Krebs *et al.*, 2020, *Psychol Med* 50:2575–2586).
    **Show solution**.
 
 To just read the notebook with all outputs, open
-`coexpression_handson_iscb_la_2026.html` in a browser.
+`coexpression_handson_iscb_la_2026.html` in a browser. The lecture slides are in
+`coexpression_networks_iscb_la_2026.html` (use the arrow keys; press `F` for
+full screen).
 
 ## What is in this folder
 
@@ -39,6 +41,7 @@ To just read the notebook with all outputs, open
 |:--|:--|
 | `coexpression_handson_iscb_la_2026.qmd` | The notebook you work in |
 | `coexpression_handson_iscb_la_2026.html` | The same notebook, rendered |
+| `coexpression_networks_iscb_la_2026.html` | The lecture slides, with an answer slide after each hands-on block (single file: open it in a browser) |
 | `data/gse124326_bd_lithium.rds` | Prepared input: log2-CPM matrix and sample information (338 samples) |
 | `results/wto_cache_2k.rds` | Pre-computed wTO networks (2,000 genes, 3 groups), so they load in seconds |
 | `R/wto_fast.R` | Fast wTO, identical output to `wTO::wTO.fast()` |
