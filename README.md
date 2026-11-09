@@ -11,7 +11,7 @@ Krebs *et al.*, 2020, *Psychol Med* 50:2575–2586).
 
 | Step | Method |
 |:--|:--|
-| Data and differential expression | limma (lithium and diagnosis contrasts) |
+| Data and a quick DE baseline | limma (lithium and diagnosis contrasts) |
 | Networks | WGCNA, ARACNE, wTO |
 | Comparing networks | wTO consensus, CoDiNA |
 | Function | ORA and GSEA with clusterProfiler |
